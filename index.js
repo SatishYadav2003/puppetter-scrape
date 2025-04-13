@@ -11,39 +11,39 @@ const port = process.env.PORT || 3000;
 // Function to get download links dynamically from multiple "mast" divs
 async function getDownloadLinks(downloadPageUrl) {
   const browser = await puppeteer.launch({
-    headless: true, 
-    executablePath: '/usr/bin/chromium', // Point to the installed chromium in Docker
-    args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for cloud environments (e.g., Render)
+    headless: true,
+    executablePath: '/usr/bin/chromium', // Point to the installed chromium in Docker (or Render environment)
+    args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for cloud environments like Render
   });
 
   const page = await browser.newPage();
-  console.log('Initial blank tab created');
+
+  // Set user-agent and referer headers
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  );
+  await page.setExtraHTTPHeaders({
+    referer: downloadPageUrl,
+  });
 
   try {
     await page.goto(downloadPageUrl, {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'networkidle2',
       timeout: 60000,
     });
-    console.log('Initial page opened:', downloadPageUrl);
 
-    // Wait for possible redirect/popup
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // Get cookies from the page for further requests
+    const cookies = await page.cookies();
 
+    // Get all mast divs on the page
     const mastDivs = await page.$$('div.mast');
-    console.log('Number of mast divs found:', mastDivs.length);
-
-    if (mastDivs.length === 0) {
-      await browser.close();
-      return { error: 'No mast divs found on the page' };
-    }
-
     const downloadLinks = [];
 
-    // Identify the mast divs that contain valid download links
+    // Loop through each mast div to find download links
     for (let i = 0; i < mastDivs.length; i++) {
       const mastDiv = mastDivs[i];
 
-      // Check if this mast div comes after 'jatt' or 'jatt1' divs
+      // Check previous elements to identify if this mast div follows 'jatt' or 'jatt1'
       const previousElements = await page.evaluate((el) => {
         let prevSiblings = [];
         let sibling = el.previousElementSibling;
@@ -54,17 +54,21 @@ async function getDownloadLinks(downloadPageUrl) {
         return prevSiblings;
       }, mastDiv);
 
-      // If this mast div follows 'jatt' or 'jatt1', check for the download link
       if (previousElements.includes('jatt') || previousElements.includes('jatt1')) {
-        console.log(`Found mast div after jatt or jatt1 (index ${i})`);
-
-        // Check if the mast div contains a download link (anchor tag)
         const linkElement = await mastDiv.$('a');
         if (linkElement) {
           const linkText = await page.evaluate((el) => el.innerText, linkElement);
-          if (linkText.includes('HDRip') || linkText.includes('BluRay')) {
+          if (linkText.includes('HDRip') || linkText.includes('BluRay') || linkText.includes('240p') || linkText.includes('480p')) {
             const href = await page.evaluate((el) => el.href, linkElement);
-            downloadLinks.push({ resolution: linkText, url: href });
+            downloadLinks.push({
+              resolution: linkText,
+              url: href,
+              headers: {
+                referer: downloadPageUrl,
+                'user-agent': await page.evaluate(() => navigator.userAgent),
+                cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
+              },
+            });
           }
         }
       }
@@ -103,5 +107,5 @@ app.get('/get-download-links', async (req, res) => {
 
 // Start the server
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`✅ Server running locally at http://localhost:${port}`);
 });
