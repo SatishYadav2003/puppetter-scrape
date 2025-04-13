@@ -1,15 +1,19 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
 const dotenv = require('dotenv');
+const { executablePath } = require('puppeteer'); // Make sure puppeteer-core is using executablePath
 
 dotenv.config();
+
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Function to get download links dynamically from multiple "mast" divs
 async function getDownloadLinks(downloadPageUrl) {
   const browser = await puppeteer.launch({
-    headless: true, // Run in headless mode (no UI)
-    args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for cloud environments like Render
+    headless: true, 
+    executablePath: '/usr/bin/chromium', // Point to the installed chromium in Docker
+    args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for cloud environments (e.g., Render)
   });
 
   const page = await browser.newPage();
@@ -25,17 +29,21 @@ async function getDownloadLinks(downloadPageUrl) {
     // Wait for possible redirect/popup
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    // Get all div elements with class "mast"
     const mastDivs = await page.$$('div.mast');
     console.log('Number of mast divs found:', mastDivs.length);
 
+    if (mastDivs.length === 0) {
+      await browser.close();
+      return { error: 'No mast divs found on the page' };
+    }
+
     const downloadLinks = [];
 
-    // Iterate over each mast div and check if it’s preceded by a jatt or jatt1 element
+    // Identify the mast divs that contain valid download links
     for (let i = 0; i < mastDivs.length; i++) {
       const mastDiv = mastDivs[i];
 
-      // Evaluate the classes of previous siblings for this mast div
+      // Check if this mast div comes after 'jatt' or 'jatt1' divs
       const previousElements = await page.evaluate((el) => {
         let prevSiblings = [];
         let sibling = el.previousElementSibling;
@@ -46,15 +54,14 @@ async function getDownloadLinks(downloadPageUrl) {
         return prevSiblings;
       }, mastDiv);
 
-      // If this mast div is immediately following a "jatt" or "jatt1" element, proceed
+      // If this mast div follows 'jatt' or 'jatt1', check for the download link
       if (previousElements.includes('jatt') || previousElements.includes('jatt1')) {
         console.log(`Found mast div after jatt or jatt1 (index ${i})`);
 
-        // Look for an anchor tag inside this mast div
+        // Check if the mast div contains a download link (anchor tag)
         const linkElement = await mastDiv.$('a');
         if (linkElement) {
           const linkText = await page.evaluate((el) => el.innerText, linkElement);
-          // Filter for specific download resolutions (HDRip or BluRay)
           if (linkText.includes('HDRip') || linkText.includes('BluRay')) {
             const href = await page.evaluate((el) => el.href, linkElement);
             downloadLinks.push({ resolution: linkText, url: href });
@@ -65,9 +72,11 @@ async function getDownloadLinks(downloadPageUrl) {
 
     await browser.close();
 
-    return downloadLinks.length 
-      ? { downloadLinks } 
-      : { error: 'No matching download links found' };
+    if (downloadLinks.length > 0) {
+      return { downloadLinks };
+    } else {
+      return { error: 'No matching download links found' };
+    }
   } catch (error) {
     console.error('Error fetching the page or parsing:', error);
     await browser.close();
@@ -75,15 +84,24 @@ async function getDownloadLinks(downloadPageUrl) {
   }
 }
 
+// Define API route to get download links
 app.get('/get-download-links', async (req, res) => {
   const { url } = req.query;
+
   if (!url) {
     return res.status(400).json({ error: 'URL query parameter is required' });
   }
-  const result = await getDownloadLinks(url);
-  res.json(result);
+
+  try {
+    const result = await getDownloadLinks(url);
+    res.json(result);
+  } catch (err) {
+    console.error('Error:', err);
+    res.status(500).json({ error: 'An error occurred while fetching the download links' });
+  }
 });
 
+// Start the server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
