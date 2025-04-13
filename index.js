@@ -12,7 +12,7 @@ const port = process.env.PORT || 3000;
 async function getDownloadLinks(downloadPageUrl) {
   const browser = await puppeteer.launch({
     headless: true, // Run in headless mode (no UI)
-    executablePath: executablePath(), // Ensure Puppeteer uses Chromium installed locally or in cloud environments
+    executablePath: process.env.CHROME_EXEC_PATH || '/usr/bin/chromium-browser', // Set the path to Chromium in Render environment
     args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for cloud environments (e.g., Render)
   });
 
