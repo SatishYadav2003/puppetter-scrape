@@ -1,49 +1,49 @@
+// index.js
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const dotenv = require('dotenv');
-const { executablePath } = require('puppeteer'); // Make sure puppeteer-core is using executablePath
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Function to get download links dynamically from multiple "mast" divs
-async function getDownloadLinks(downloadPageUrl) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: '/usr/bin/chromium', // Point to the installed chromium in Docker (or Render environment)
-    args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for cloud environments like Render
-  });
-
-  const page = await browser.newPage();
-
-  // Set user-agent and referer headers
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  );
-  await page.setExtraHTTPHeaders({
-    referer: downloadPageUrl,
-  });
-
+// Utility function to launch Puppeteer
+async function launchBrowser() {
   try {
+    return await puppeteer.launch({
+      headless: 'new',
+      executablePath: '/usr/bin/chromium',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+  } catch (err) {
+    console.error('Failed to launch Puppeteer:', err);
+    throw err;
+  }
+}
+
+// Scraper function
+async function getDownloadLinks(downloadPageUrl) {
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const page = await browser.newPage();
+
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+    await page.setExtraHTTPHeaders({ referer: downloadPageUrl });
+
     await page.goto(downloadPageUrl, {
       waitUntil: 'networkidle2',
       timeout: 60000,
     });
 
-    // Get cookies from the page for further requests
     const cookies = await page.cookies();
-
-    // Get all mast divs on the page
     const mastDivs = await page.$$('div.mast');
     const downloadLinks = [];
 
-    // Loop through each mast div to find download links
-    for (let i = 0; i < mastDivs.length; i++) {
-      const mastDiv = mastDivs[i];
-
-      // Check previous elements to identify if this mast div follows 'jatt' or 'jatt1'
+    for (const mastDiv of mastDivs) {
       const previousElements = await page.evaluate((el) => {
         let prevSiblings = [];
         let sibling = el.previousElementSibling;
@@ -58,14 +58,16 @@ async function getDownloadLinks(downloadPageUrl) {
         const linkElement = await mastDiv.$('a');
         if (linkElement) {
           const linkText = await page.evaluate((el) => el.innerText, linkElement);
-          if (linkText.includes('HDRip') || linkText.includes('BluRay') || linkText.includes('240p') || linkText.includes('480p')) {
+          if (/(HDRip|BluRay|240p|480p)/.test(linkText)) {
             const href = await page.evaluate((el) => el.href, linkElement);
+            const userAgent = await page.evaluate(() => navigator.userAgent);
+
             downloadLinks.push({
               resolution: linkText,
               url: href,
               headers: {
                 referer: downloadPageUrl,
-                'user-agent': await page.evaluate(() => navigator.userAgent),
+                'user-agent': userAgent,
                 cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
               },
             });
@@ -75,37 +77,34 @@ async function getDownloadLinks(downloadPageUrl) {
     }
 
     await browser.close();
-
-    if (downloadLinks.length > 0) {
-      return { downloadLinks };
-    } else {
-      return { error: 'No matching download links found' };
-    }
+    return downloadLinks.length ? { downloadLinks } : { error: 'No matching download links found' };
   } catch (error) {
-    console.error('Error fetching the page or parsing:', error);
-    await browser.close();
-    return { error: 'An error occurred while fetching the download links' };
+    console.error('Scraper Error:', error);
+    if (browser) await browser.close();
+    return { error: 'Failed to scrape download links. Please try again.' };
   }
 }
 
-// Define API route to get download links
+// API Route
 app.get('/get-download-links', async (req, res) => {
   const { url } = req.query;
 
-  if (!url) {
-    return res.status(400).json({ error: 'URL query parameter is required' });
-  }
+  if (!url) return res.status(400).json({ error: 'Missing URL query parameter.' });
 
   try {
     const result = await getDownloadLinks(url);
     res.json(result);
   } catch (err) {
-    console.error('Error:', err);
-    res.status(500).json({ error: 'An error occurred while fetching the download links' });
+    console.error('Server Error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
 });
 
-// Start the server
+// Health Check
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
 app.listen(port, () => {
-  console.log(`✅ Server running locally at http://localhost:${port}`);
+  console.log(`✅ Server listening at http://localhost:${port}`);
 });
