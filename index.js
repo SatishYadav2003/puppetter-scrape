@@ -16,7 +16,7 @@ async function getDownloadLinks(downloadPageUrl) {
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      executablePath: '/usr/bin/chromium-browser', // fallback to 'chromium' if needed
+      executablePath: '/usr/bin/chromium', // fallback to 'chromium' if needed
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
       timeout: 0,
     });

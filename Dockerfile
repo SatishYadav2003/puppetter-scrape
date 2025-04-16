@@ -1,8 +1,8 @@
 FROM node:20-slim
 
-# Install Chromium and dependencies
+# Install Chromium and its dependencies
 RUN apt-get update && apt-get install -y \
-    chromium-browser \
+    chromium \
     ca-certificates \
     fonts-liberation \
     libappindicator3-1 \
@@ -21,11 +21,18 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
-# App files
+# Set working directory
 WORKDIR /app
+
+# Install node dependencies
 COPY package*.json ./
 RUN npm install
+
+# Copy app files
 COPY . .
 
-EXPOSE 5000
+# Expose the port
+EXPOSE 3000
+
+# Start the app
 CMD ["npm", "start"]
