@@ -1,32 +1,26 @@
-// index.js
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const dotenv = require('dotenv');
+const { executablePath } = require('puppeteer');
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 
-// Utility function to launch Puppeteer
-async function launchBrowser() {
-  try {
-    return await puppeteer.launch({
-      headless: 'new',
-      executablePath: '/usr/bin/chromium',
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-  } catch (err) {
-    console.error('Failed to launch Puppeteer:', err);
-    throw err;
-  }
-}
-
-// Scraper function
+// Utility function to scrape download links
 async function getDownloadLinks(downloadPageUrl) {
+  console.log("🔍 Navigating to:", downloadPageUrl);
+
   let browser;
   try {
-    browser = await launchBrowser();
+    browser = await puppeteer.launch({
+      headless: 'new',
+      executablePath: '/usr/bin/chromium-browser', // fallback to 'chromium' if needed
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      timeout: 0,
+    });
+
     const page = await browser.newPage();
 
     await page.setUserAgent(
@@ -35,15 +29,17 @@ async function getDownloadLinks(downloadPageUrl) {
     await page.setExtraHTTPHeaders({ referer: downloadPageUrl });
 
     await page.goto(downloadPageUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 60000,
+      waitUntil: 'domcontentloaded',
+      timeout: 120000,
     });
 
     const cookies = await page.cookies();
     const mastDivs = await page.$$('div.mast');
     const downloadLinks = [];
 
-    for (const mastDiv of mastDivs) {
+    for (let i = 0; i < mastDivs.length; i++) {
+      const mastDiv = mastDivs[i];
+
       const previousElements = await page.evaluate((el) => {
         let prevSiblings = [];
         let sibling = el.previousElementSibling;
@@ -58,16 +54,14 @@ async function getDownloadLinks(downloadPageUrl) {
         const linkElement = await mastDiv.$('a');
         if (linkElement) {
           const linkText = await page.evaluate((el) => el.innerText, linkElement);
-          if (/(HDRip|BluRay|240p|480p)/.test(linkText)) {
+          if (linkText.includes('HDRip') || linkText.includes('BluRay') || linkText.includes('240p') || linkText.includes('480p')) {
             const href = await page.evaluate((el) => el.href, linkElement);
-            const userAgent = await page.evaluate(() => navigator.userAgent);
-
             downloadLinks.push({
               resolution: linkText,
               url: href,
               headers: {
                 referer: downloadPageUrl,
-                'user-agent': userAgent,
+                'user-agent': await page.evaluate(() => navigator.userAgent),
                 cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
               },
             });
@@ -77,32 +71,35 @@ async function getDownloadLinks(downloadPageUrl) {
     }
 
     await browser.close();
-    return downloadLinks.length ? { downloadLinks } : { error: 'No matching download links found' };
+
+    return downloadLinks.length > 0
+      ? { downloadLinks }
+      : { error: 'No matching download links found' };
   } catch (error) {
-    console.error('Scraper Error:', error);
+    console.error('❌ Scraper Error:', error);
     if (browser) await browser.close();
     return { error: 'Failed to scrape download links. Please try again.' };
   }
 }
 
-// API Route
+// Health check
+app.get('/ping', (_, res) => res.send('pong'));
+
+// Main endpoint
 app.get('/get-download-links', async (req, res) => {
   const { url } = req.query;
 
-  if (!url) return res.status(400).json({ error: 'Missing URL query parameter.' });
+  if (!url) {
+    return res.status(400).json({ error: 'Missing URL parameter.' });
+  }
 
   try {
     const result = await getDownloadLinks(url);
     res.json(result);
   } catch (err) {
-    console.error('Server Error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
+    console.error('❌ Error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
-});
-
-// Health Check
-app.get('/ping', (req, res) => {
-  res.send('pong');
 });
 
 app.listen(port, () => {
