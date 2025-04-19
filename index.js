@@ -36,9 +36,10 @@ async function getDownloadLinks(downloadPageUrl) {
     });
 
     const cookies = await page.cookies();
-    const mastDivs = await page.$$('div.mast');
+    const mastDivs = await page.$x("//div[@class='mast' and normalize-space(@style)='text-align:left;']");
     const downloadLinks = [];
 
+    // Iterate over the divs, skipping the last one if it contains the unwanted text
     for (let i = 0; i < mastDivs.length; i++) {
       const mastDiv = mastDivs[i];
 
@@ -46,32 +47,27 @@ async function getDownloadLinks(downloadPageUrl) {
       if (!linkElement) continue;
 
       const linkText = await page.evaluate(el => el.innerText, linkElement);
-      if (linkText.toLowerCase().includes('android app')) continue;
 
-      if (
-        linkText.includes('HDRip') ||
-        linkText.includes('BluRay') ||
-        linkText.includes('240p') ||
-        linkText.includes('480p') ||
-        linkText.includes('720p') ||
-        linkText.includes('1080p')
-      ) {
-        const href = await page.evaluate(el => el.href, linkElement);
-        const sizeText = await mastDiv.evaluate(el =>
-          el.innerText.match(/\[\d+ Mb\]/)?.[0] || '', mastDiv
-        );
-
-        downloadLinks.push({
-          resolution: linkText,
-          size: sizeText.replace('[', '').replace(']', ''),
-          url: href,
-          headers: {
-            referer: downloadPageUrl,
-            'user-agent': await page.evaluate(() => navigator.userAgent),
-            cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
-          },
-        });
+      // Check if the last div contains the "Download/Watch in Android APP" text
+      if (i === mastDivs.length - 1 && linkText.toLowerCase().includes('download/watch in android app')) {
+        continue; // Skip the last div if it matches the unwanted text
       }
+
+      const href = await page.evaluate(el => el.href, linkElement);
+      const sizeText = await mastDiv.evaluate(el =>
+        el.innerText.match(/\[\d+ Mb\]/)?.[0] || '', mastDiv
+      );
+
+      downloadLinks.push({
+        resolution: linkText,
+        size: sizeText.replace('[', '').replace(']', ''),
+        url: href,
+        headers: {
+          referer: downloadPageUrl,
+          'user-agent': await page.evaluate(() => navigator.userAgent),
+          cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
+        },
+      });
     }
 
     await browser.close();
