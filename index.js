@@ -1,7 +1,7 @@
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const dotenv = require('dotenv');
-const cors = require("cors");
+const cors = require('cors');
 
 dotenv.config();
 
@@ -10,24 +10,23 @@ const port = process.env.PORT || 5000;
 
 app.use(cors());
 
-// Utility function to scrape download links
-async function getDownloadLinks(downloadPageUrl) {
-  console.log("🔍 Navigating to:", downloadPageUrl);
+// Reusable constants
+const chromiumPath = '/usr/bin/chromium';
+const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+async function getDownloadLinks(downloadPageUrl) {
   let browser;
+
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      executablePath: '/usr/bin/chromium', // or 'chromium'
+      executablePath: chromiumPath,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
       timeout: 0,
     });
 
     const page = await browser.newPage();
-
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
+    await page.setUserAgent(userAgent);
     await page.setExtraHTTPHeaders({ referer: downloadPageUrl });
 
     await page.goto(downloadPageUrl, {
@@ -36,70 +35,62 @@ async function getDownloadLinks(downloadPageUrl) {
     });
 
     const cookies = await page.cookies();
-    const mastDivs = await page.$x("//div[@class='mast' and normalize-space(@style)='text-align:left;']");
-    const downloadLinks = [];
+    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    const navUserAgent = await page.evaluate(() => navigator.userAgent);
 
-    // Iterate over the divs, skipping the last one if it contains the unwanted text
-    for (let i = 0; i < mastDivs.length; i++) {
-      const mastDiv = mastDivs[i];
+    const mastDivs = await page.$$eval("div.mast", (divs) =>
+      divs
+        .filter(div => div.getAttribute("style")?.trim() === "text-align:left;")
+        .map((div, i, arr) => {
+          const link = div.querySelector("a");
+          const linkText = link?.innerText || "";
+          const isLast = i === arr.length - 1;
+          const isAppLink = linkText.toLowerCase().includes("download/watch in android app");
 
-      const linkElement = await mastDiv.$('a');
-      if (!linkElement) continue;
+          if (!link || (isLast && isAppLink)) return null;
 
-      const linkText = await page.evaluate(el => el.innerText, linkElement);
+          const sizeMatch = div.innerText.match(/\[\d+ Mb\]/);
+          return {
+            resolution: linkText,
+            size: sizeMatch?.[0]?.slice(1, -1) || '',
+            url: link.href,
+          };
+        })
+        .filter(Boolean)
+    );
 
-      // Check if the last div contains the "Download/Watch in Android APP" text
-      if (i === mastDivs.length - 1 && linkText.toLowerCase().includes('download/watch in android app')) {
-        continue; // Skip the last div if it matches the unwanted text
-      }
-
-      const href = await page.evaluate(el => el.href, linkElement);
-      const sizeText = await mastDiv.evaluate(el =>
-        el.innerText.match(/\[\d+ Mb\]/)?.[0] || '', mastDiv
-      );
-
-      downloadLinks.push({
-        resolution: linkText,
-        size: sizeText.replace('[', '').replace(']', ''),
-        url: href,
-        headers: {
-          referer: downloadPageUrl,
-          'user-agent': await page.evaluate(() => navigator.userAgent),
-          cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
-        },
-      });
-    }
-
-    await browser.close();
+    const downloadLinks = mastDivs.map(link => ({
+      ...link,
+      headers: {
+        referer: downloadPageUrl,
+        'user-agent': navUserAgent,
+        cookie: cookieHeader,
+      },
+    }));
 
     return downloadLinks.length > 0
       ? { downloadLinks }
       : { error: 'No matching download links found' };
+
   } catch (error) {
     console.error('❌ Scraper Error:', error);
-    if (browser) await browser.close();
     return { error: 'Failed to scrape download links. Please try again.' };
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
-// Health check
+// Routes
 app.get('/ping', (_, res) => res.send('pong'));
 
-// Main endpoint
 app.get('/get-download-links', async (req, res) => {
   const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'Missing URL parameter.' });
 
-  if (!url) {
-    return res.status(400).json({ error: 'Missing URL parameter.' });
-  }
+  const result = await getDownloadLinks(url);
+  if (result.error) return res.status(500).json(result);
 
-  try {
-    const result = await getDownloadLinks(url);
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+  res.json(result);
 });
 
 app.listen(port, () => {
