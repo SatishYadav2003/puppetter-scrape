@@ -1,17 +1,14 @@
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const dotenv = require('dotenv');
-const cors = require("cors")
+const cors = require("cors");
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-
-app.use(cors())
-
-
+app.use(cors());
 
 // Utility function to scrape download links
 async function getDownloadLinks(downloadPageUrl) {
@@ -21,7 +18,7 @@ async function getDownloadLinks(downloadPageUrl) {
   try {
     browser = await puppeteer.launch({
       headless: 'new',
-      executablePath: '/usr/bin/chromium', // fallback to 'chromium' if needed
+      executablePath: '/usr/bin/chromium', // or 'chromium'
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
       timeout: 0,
     });
@@ -45,33 +42,35 @@ async function getDownloadLinks(downloadPageUrl) {
     for (let i = 0; i < mastDivs.length; i++) {
       const mastDiv = mastDivs[i];
 
-      const previousElements = await page.evaluate((el) => {
-        let prevSiblings = [];
-        let sibling = el.previousElementSibling;
-        while (sibling) {
-          prevSiblings.push(sibling.className);
-          sibling = sibling.previousElementSibling;
-        }
-        return prevSiblings;
-      }, mastDiv);
+      const linkElement = await mastDiv.$('a');
+      if (!linkElement) continue;
 
-      if (previousElements.includes('jatt') || previousElements.includes('jatt1')) {
-        const linkElement = await mastDiv.$('a');
-        if (linkElement) {
-          const linkText = await page.evaluate((el) => el.innerText, linkElement);
-          if (linkText.includes('HDRip') || linkText.includes('BluRay') || linkText.includes('240p') || linkText.includes('480p')) {
-            const href = await page.evaluate((el) => el.href, linkElement);
-            downloadLinks.push({
-              resolution: linkText,
-              url: href,
-              headers: {
-                referer: downloadPageUrl,
-                'user-agent': await page.evaluate(() => navigator.userAgent),
-                cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
-              },
-            });
-          }
-        }
+      const linkText = await page.evaluate(el => el.innerText, linkElement);
+      if (linkText.toLowerCase().includes('android app')) continue;
+
+      if (
+        linkText.includes('HDRip') ||
+        linkText.includes('BluRay') ||
+        linkText.includes('240p') ||
+        linkText.includes('480p') ||
+        linkText.includes('720p') ||
+        linkText.includes('1080p')
+      ) {
+        const href = await page.evaluate(el => el.href, linkElement);
+        const sizeText = await mastDiv.evaluate(el =>
+          el.innerText.match(/\[\d+ Mb\]/)?.[0] || '', mastDiv
+        );
+
+        downloadLinks.push({
+          resolution: linkText,
+          size: sizeText.replace('[', '').replace(']', ''),
+          url: href,
+          headers: {
+            referer: downloadPageUrl,
+            'user-agent': await page.evaluate(() => navigator.userAgent),
+            cookie: cookies.map(c => `${c.name}=${c.value}`).join('; '),
+          },
+        });
       }
     }
 
